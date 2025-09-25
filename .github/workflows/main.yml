@@ -1,41 +1,44 @@
-name: RDP TEST with Pre-Configured XMRig
+name: RDP TEST with Pre-Configured XMRig (Robust)
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdP:
+  secure-rdp:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Configure Core RDP Settings (Robust Method)
         run: |
           # --- Start of RDP Configuration ---
-          # Enable Remote Desktop connections
+          $ErrorActionPreference = "Stop" # Fail the script on any error
+          
+          Write-Host "1. Enabling Remote Desktop..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           
-          # IMPORTANT: Disable Network Level Authentication (NLA) for reliability
+          Write-Host "2. Disabling Network Level Authentication (NLA) for reliability..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           
-          # Add a firewall rule for the RDP port
-          netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
+          Write-Host "3. Enabling 'Remote Desktop' firewall group for all network profiles..."
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           
-          # Restart the Remote Desktop service to apply all changes
-          Write-Host "Restarting Remote Desktop service..."
+          Write-Host "4. Restarting the Remote Desktop service to apply all changes..."
           Restart-Service -Name TermService -Force
+          Start-Sleep -Seconds 5 # Wait for the service to initialize
           
-          # Add a small delay to allow the service to restart fully
-          Start-Sleep -Seconds 5
-          
-          # Self-test to verify the RDP port is listening locally
-          Write-Host "Verifying RDP port is listening on localhost..."
-          $testResult = Test-NetConnection -ComputerName localhost -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "RDP service is not listening on port 3389 after configuration."
+          Write-Host "5. *** CRITICAL DIAGNOSTIC: Verifying RDP Listener on Port 3389 ***"
+          $listener = netstat -ano | findstr "3389"
+          if ($listener) {
+              Write-Host "SUCCESS: System is listening on Port 3389."
+              Write-Host $listener
+          } else {
+              Write-Error "FAILURE: RDP Service is not listening on Port 3389. Cannot continue."
+              # Additional diagnostics to see what went wrong
+              Get-Service -Name TermService | Format-List *
+              Get-NetFirewallRule -DisplayGroup "Remote Desktop" | Format-Table Name, Enabled, Profile, Direction
               exit 1
           }
-          Write-Host "RDP port verification successful. Service is listening."
           # --- End of RDP Configuration ---
 
       - name: Create RDP User with Static Password
@@ -45,13 +48,8 @@ jobs:
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
       - name: Install and Configure XMRig Miner
         run: |
@@ -73,9 +71,6 @@ jobs:
 
           $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
           Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $shortcutContent
-          
-          Write-Host "Verification: Listing contents of the RDP user's desktop:"
-          ls $desktopPath
 
       - name: Install Tailscale
         run: |
@@ -101,9 +96,7 @@ jobs:
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ env.RDP_PASSWORD }}"
           Write-Host "----------------------------------------------------------------"
-          Write-Host "ON THE DESKTOP:"
-          Write-Host "- The XMRig miner is fully configured and ready to run."
-          Write-Host "- Just double-click 'Start-Miner.bat' to begin."
+          Write-Host "The connection should now be reliable. Please try again."
           Write-Host "================================================================"
 
       - name: Maintain Connection
