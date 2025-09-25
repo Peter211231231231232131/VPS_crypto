@@ -6,7 +6,7 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 1 # <-- This job will automatically stop after 3 hours
+    timeout-minutes: 180 # <-- This job will automatically stop after 3 hours
 
     steps:
       - name: Create Miner User
