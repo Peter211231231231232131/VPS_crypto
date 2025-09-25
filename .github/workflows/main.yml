@@ -1,4 +1,4 @@
-name: RDP TEST with Pre-Configured XMRig (Robust)
+name: RDP TEST with Pre-Configured XMRig
 
 on:
   workflow_dispatch:
@@ -9,37 +9,10 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings (Robust Method)
+      - name: Configure Core RDP Settings
         run: |
-          # --- Start of RDP Configuration ---
-          $ErrorActionPreference = "Stop" # Fail the script on any error
-          
-          Write-Host "1. Enabling Remote Desktop..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          
-          Write-Host "2. Disabling Network Level Authentication (NLA) for reliability..."
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          
-          Write-Host "3. Enabling 'Remote Desktop' firewall group for all network profiles..."
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          
-          Write-Host "4. Restarting the Remote Desktop service to apply all changes..."
-          Restart-Service -Name TermService -Force
-          Start-Sleep -Seconds 5 # Wait for the service to initialize
-          
-          Write-Host "5. *** CRITICAL DIAGNOSTIC: Verifying RDP Listener on Port 3389 ***"
-          $listener = netstat -ano | findstr "3389"
-          if ($listener) {
-              Write-Host "SUCCESS: System is listening on Port 3389."
-              Write-Host $listener
-          } else {
-              Write-Error "FAILURE: RDP Service is not listening on Port 3389. Cannot continue."
-              # Additional diagnostics to see what went wrong
-              Get-Service -Name TermService | Format-List *
-              Get-NetFirewallRule -DisplayGroup "Remote Desktop" | Format-Table Name, Enabled, Profile, Direction
-              exit 1
-          }
-          # --- End of RDP Configuration ---
+          netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
 
       - name: Create RDP User with Static Password
         run: |
@@ -48,29 +21,71 @@ jobs:
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
+          
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
 
       - name: Install and Configure XMRig Miner
         run: |
-          $ErrorActionPreference = "Stop"
+          # --- Start of Script ---
+          $ErrorActionPreference = "Stop" # This makes the script fail on any error
+
           $minerVersion = "6.21.2"
           $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
           $zipPath = "$env:TEMP\xmrig.zip"
           $desktopPath = "C:\Users\RDP\Desktop"
 
+          Write-Host "Ensuring Desktop directory exists at $desktopPath..."
           New-Item -ItemType Directory -Force -Path $desktopPath
+          
+          Write-Host "Downloading XMRig v$($minerVersion) from $downloadUrl..."
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+          Write-Host "Download complete."
+
+          Write-Host "Extracting XMRig to the RDP user's Desktop..."
           Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
+          Write-Host "Extraction complete."
           
           $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
-          if (-not $minerFolder) { Write-Error "Could not find extracted XMRig folder!"; exit 1 }
+          if (-not $minerFolder) {
+              Write-Error "Could not find extracted XMRig folder on the desktop!"
+              exit 1
+          }
+          Write-Host "Found miner folder at: $minerFolder"
           
-          $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsyn3wede4o9ryebixumbccy5ocdoskks2u6t9gxjfzjnkxc7tj1uq4uky5bp","pass": "x"}]}'
+          Write-Host "Creating pre-filled config.json..."
+          $jsonContent = '{' + `
+            '"autosave": true,' + `
+            '"cpu": true,' + `
+            '"opencl": false,' + `
+            '"cuda": false,' + `
+            '"pools": [' + `
+            '{' + `
+            '"algo": "rx/0",' + `
+            '"url": "pool.supportxmr.com:5555",' + `
+            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsyn3wede4o9ryebixumbccy5ocdoskks2u6t9gxjfzjnkxc7tj1uq4uky5bp",' + `
+            '"pass": "x"' + `
+            '}' + `
+            ']' + `
+            '}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
+          Write-Host "config.json created successfully."
 
+          Write-Host "Creating a 'Start Miner' shortcut on the Desktop..."
           $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
           Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $shortcutContent
+          Write-Host "Start-Miner.bat created successfully."
+          
+          Write-Host "--- Verification Step ---"
+          Write-Host "Listing contents of the RDP user's desktop:"
+          ls $desktopPath
+          Write-Host "-------------------------"
+          # --- End of Script ---
+
 
       - name: Install Tailscale
         run: |
@@ -84,19 +99,24 @@ jobs:
           Start-Sleep -Seconds 10
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           
-          if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
-          echo "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
       
       - name: Display RDP Connection Details
         run: |
           Write-Host "================================================================"
           Write-Host "                 RDP ACCESS READY"
           Write-Host "================================================================"
-          Write-Host "Tailscale IP Address: ${{ env.TAILSCALE_IP }}"
+          Write-Host "Tailscale IP Address: $env:TAIILSCALE_IP"
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ env.RDP_PASSWORD }}"
           Write-Host "----------------------------------------------------------------"
-          Write-Host "The connection should now be reliable. Please try again."
+          Write-Host "ON THE DESKTOP:"
+          Write-Host "- The XMRig miner is fully configured and ready to run."
+          Write-Host "- Just double-click 'Start-Miner.bat' to begin."
           Write-Host "================================================================"
 
       - name: Maintain Connection
