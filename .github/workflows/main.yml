@@ -1,4 +1,4 @@
-name: RDP TEST Auto-Restarting Miner
+name: RDP TEST Auto-Restarting Miner (Final)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 180 # <-- This job will automatically stop after 3 hours
+    timeout-minutes: 1 # <-- This job will automatically stop after 3 hours
 
     steps:
       - name: Create Miner User
@@ -63,10 +63,14 @@ jobs:
     if: always()
 
     steps:
+      # CORRECTED: This step is required for the 'gh' command to know which repository to use.
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
       - name: Trigger new workflow run
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }} # <-- This line securely uses your secret
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           echo "Triggering the next workflow run..."
-          # Replace 'main.yml' if your workflow file has a different name
+          # Replace 'main.yml' with your workflow's filename if it's different.
           gh workflow run main.yml
