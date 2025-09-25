@@ -1,4 +1,4 @@
-name: RDP TEST with Auto-Start Miner
+name: RDP TEST with Auto-Start Miner (Verified)
 
 on:
   workflow_dispatch:
@@ -31,32 +31,28 @@ jobs:
           $zipPath = "$env:TEMP\xmrig.zip"
           $desktopPath = "C:\Users\RDP\Desktop"
           
+          Write-Host "Ensuring Desktop directory exists at $desktopPath..."
           New-Item -ItemType Directory -Force -Path $desktopPath
+          
+          Write-Host "Downloading XMRig v$($minerVersion)..."
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+          Write-Host "Download complete."
+
+          Write-Host "Extracting XMRig to the RDP user's Desktop..."
           Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
+          Write-Host "Extraction complete."
           
           $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
           if (-not $minerFolder) { Write-Error "Could not find extracted XMRig folder!"; exit 1 }
+          Write-Host "Found miner folder: $minerFolder"
           
-          # Confirmed: Using the correct, case-sensitive wallet address you provided.
-          $jsonContent = '{' + `
-            '"autosave": true,' + `
-            '"cpu": true,' + `
-            '"opencl": false,' + `
-            '"cuda": false,' + `
-            '"pools": [' + `
-            '{' + `
-            '"algo": "rx/0",' + `
-            '"url": "pool.supportxmr.com:5555",' + `
-            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP",' + `
-            '"pass": "x"' + `
-            '}' + `
-            ']' + `
-            '}'
+          $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP","pass": "x"}]}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
+          Write-Host "config.json created."
 
           $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
           Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $shortcutContent
+          Write-Host "Start-Miner.bat created."
 
       - name: Auto-start Miner on Login
         run: |
@@ -96,7 +92,6 @@ jobs:
           Write-Host "Password: ${{ env.RDP_PASSWORD }}"
           Write-Host "----------------------------------------------------------------"
           Write-Host "ACTION: The miner will now start AUTOMATICALLY when you log in."
-          Write-Host "Just connect to the RDP session to begin mining."
           Write-Host "================================================================"
       - name: Maintain Connection
         run: |
