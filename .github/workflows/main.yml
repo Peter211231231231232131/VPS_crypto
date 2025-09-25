@@ -31,21 +31,33 @@ jobs:
 
       - name: Install and Configure XMRig Miner
         run: |
-          # CORRECTED: Updated to a valid XMRig version that exists for download.
+          # --- Start of Script ---
+          $ErrorActionPreference = "Stop" # This makes the script fail on any error
+
           $minerVersion = "6.21.2"
           $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
           $zipPath = "$env:TEMP\xmrig.zip"
-          $extractPath = "C:\Users\RDP\Desktop"
+          $desktopPath = "C:\Users\RDP\Desktop"
 
-          Write-Host "Downloading XMRig v$($minerVersion)..."
+          Write-Host "Ensuring Desktop directory exists at $desktopPath..."
+          New-Item -ItemType Directory -Force -Path $desktopPath
+          
+          Write-Host "Downloading XMRig v$($minerVersion) from $downloadUrl..."
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+          Write-Host "Download complete."
 
           Write-Host "Extracting XMRig to the RDP user's Desktop..."
-          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+          Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
+          Write-Host "Extraction complete."
           
-          $minerFolder = (Get-ChildItem -Path $extractPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
+          $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
+          if (-not $minerFolder) {
+              Write-Error "Could not find extracted XMRig folder on the desktop!"
+              exit 1
+          }
+          Write-Host "Found miner folder at: $minerFolder"
           
-          Write-Host "Creating pre-filled config.json with your wallet address..."
+          Write-Host "Creating pre-filled config.json..."
           $jsonContent = '{' + `
             '"autosave": true,' + `
             '"cpu": true,' + `
@@ -60,14 +72,19 @@ jobs:
             '}' + `
             ']' + `
             '}'
-          
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
+          Write-Host "config.json created successfully."
 
           Write-Host "Creating a 'Start Miner' shortcut on the Desktop..."
           $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
-          Set-Content -Path (Join-Path $extractPath "Start-Miner.bat") -Value $shortcutContent
+          Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $shortcutContent
+          Write-Host "Start-Miner.bat created successfully."
           
-          Write-Host "XMRig Miner is now fully pre-configured on the Desktop."
+          Write-Host "--- Verification Step ---"
+          Write-Host "Listing contents of the RDP user's desktop:"
+          ls $desktopPath
+          Write-Host "-------------------------"
+          # --- End of Script ---
 
 
       - name: Install Tailscale
@@ -93,7 +110,7 @@ jobs:
           Write-Host "================================================================"
           Write-Host "                 RDP ACCESS READY"
           Write-Host "================================================================"
-          Write-Host "Tailscale IP Address: $env:TAILSCALE_IP"
+          Write-Host "Tailscale IP Address: $env:TAIILSCALE_IP"
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ env.RDP_PASSWORD }}"
           Write-Host "----------------------------------------------------------------"
